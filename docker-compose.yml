@@ -1,0 +1,115 @@
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.10
+    command: redpanda start --overprovisioned --smp 1 --memory 1G --reserve-memory 0M --node-id 0 --check=false
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9644/v1/status/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - iiot-net
+
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:latest
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "8080:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - iiot-net
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    environment:
+      POSTGRES_DB: iiot
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d iiot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - iiot-net
+
+  flink-jobmanager:
+    image: flink:latest
+    command: jobmanager
+    ports:
+      - "8081:8081"
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    volumes:
+      - ./flink-jobs:/opt/flink/jobs
+    networks:
+      - iiot-net
+
+  flink-taskmanager:
+    image: flink:latest
+    command: taskmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    depends_on:
+      flink-jobmanager:
+        condition: service_started
+    networks:
+      - iiot-net
+
+  spark-master:
+    image: spark:3.5.0
+    ports:
+      - "7077:7077"
+      - "8082:8080"
+    volumes:
+      - ./spark-jobs:/opt/spark/jobs
+    networks:
+      - iiot-net
+
+  spark-worker:
+    image: spark:3.5.0
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    networks:
+      - iiot-net
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: "azurite-blob --loose --blobHost 0.0.0.0 --blobPort 10000"
+    ports:
+      - "10000:10000"
+    volumes:
+      - azurite-data:/data
+    networks:
+      - iiot-net
+
+  prefect:
+    image: prefecthq/prefect:2-latest
+    ports:
+      - "4200:4200"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4200"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - iiot-net
+networks:
+  iiot-net:
+    driver: bridge
+
+volumes:
+  timescale-data:
+  azurite-data:
