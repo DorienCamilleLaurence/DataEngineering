@@ -14,8 +14,7 @@ from kafka import KafkaProducer
 
 
 # 1. Generate sensor readings with realistic values using Gaussian distribution
-#  2. Publish messages to Redpanda topic 
-# machine-sensors
+#  2. Publish messages to Redpanda topic machine-sensors
 #  3. Send messages every x seconds (configurable via environment variable)
 #  4. At start of the script, generate a bunch of messages from the past week to spread sensor readings
 #  5. Include proper error handling and reconnection logic
@@ -33,11 +32,10 @@ MACHINES = [
     {"id": "M3", "type": "Press", "location": "Plant A"},
 ]
 
-SENSOR = ["temperature", "pressure", "vibration"]
+SENSORS = ["temperature", "pressure", "vibration"]
 
 
 # ---------- Functies ----------
-
 def connect_producer():
     """Try to connect with retry logic."""
     while True:
@@ -67,7 +65,7 @@ def generate_sensor_value(sensor_type):
 def generate_message(timestamp=None):
     """Build a machine sensor JSON event."""
     machine = random.choice(MACHINES)
-    sensor = random.choice(SENSOR_TYPES)
+    sensor = random.choice(SENSORS)
 
     return {
         "machine_id": machine["id"],
