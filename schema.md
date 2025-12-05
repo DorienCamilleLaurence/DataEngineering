@@ -20,46 +20,27 @@ https://github.com/timescale/timescaledb
 
 
 
-CREATE TABLE machine\_sensors (
-	time TIMESTAMPTZ NOT NULL,
+CREATE TABLE machine_sensors (
+    id SERIAL PRIMARY KEY,
+    machine_id VARCHAR(50) NOT NULL,
+    sensor_type VARCHAR(50) NOT NULL,
+    value DOUBLE PRECISION NOT NULL,
+    ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-&nbsp;	location TEXT NOT NULL,
+CREATE TABLE sensor_aggregates (
+    id SERIAL PRIMARY KEY,
+    machine_id VARCHAR(50) NOT NULL,
+    sensor_type VARCHAR(50) NOT NULL,
+    avg_value DOUBLE PRECISION,
+    min_value DOUBLE PRECISION,
+    max_value DOUBLE PRECISION,
+    count_readings INT,
+    window_start TIMESTAMPTZ NOT NULL,
+    window_end TIMESTAMPTZ NOT NULL
+);
 
-&nbsp;	sensor\_id INTEGER CHECK (sensor\_id > 0), -> ?
-	...
-	PRIMARY KEY (time, sensor\_id)
+CREATE INDEX idx_machine_sensors_machine_ts ON machine_sensors(machine_id, ts);
+CREATE INDEX idx_sensor_aggregates_machine_window ON sensor_aggregates(machine_id, window_start);
 
-) WITH (
-
-&nbsp;	timescaledb.hypertable,
-
-&nbsp;	timescaledb.partition\_column='time', -> ?
-
-&nbsp;	timescaledb.segementby='location' -> ?
-
-&nbsp;	
-
-
-
-##### sensor\_aggragates
-
-
-
-
-
-#### aanpassen van de tabellen:
-
-
-
-ALTER TABLE tablename
-
-&nbsp;	ADD COLUMN kolomnaam datatype;
-
-
-
-#### Data retention policy
-
-
-
-SELECT add\_retention\_policy('hypertable name', INTERVAL '90 days')
-
+SELECT add_retention_policy('machine_sensors', INTERVAL '90 days');
