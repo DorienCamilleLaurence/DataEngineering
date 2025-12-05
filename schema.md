@@ -28,6 +28,8 @@ CREATE TABLE machine_sensors (
     ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+
+#### sensor\_aggregates
 CREATE TABLE sensor_aggregates (
     id SERIAL PRIMARY KEY,
     machine_id VARCHAR(50) NOT NULL,
