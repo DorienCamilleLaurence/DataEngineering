@@ -1,0 +1,4 @@
+kafka-python
+numpy
+pydantic
+python-dotenv
