@@ -23,7 +23,7 @@ from kafka import KafkaProducer
 logging.basicConfig(level=logging.INFO)
 
 SEND_INTERVAL = float(os.getenv("SEND_INTERVAL", 2))
-BROKER = os.getenv("KAFKA_BROKER", "redpanda:9092")
+BROKER = os.getenv("BROKER", "redpanda:9092")
 TOPIC = os.getenv("TOPIC", "machine-sensors")
 
 MACHINES = [
