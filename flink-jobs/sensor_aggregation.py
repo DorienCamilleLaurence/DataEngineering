@@ -53,6 +53,10 @@ from pyflink.table.udf import udf
 import sys
 from collections import deque, defaultdict
 
+# --- Flink Environment ---
+env_settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
+t_env = TableEnvironment.create(env_settings)
+
 # -------------------------------------------------------------------
 # UDF (user defined function ): Sliding Min
 # -------------------------------------------------------------------
@@ -140,9 +144,6 @@ TIMESCALEDB_URL = os.getenv("TIMESCALEDB_URL", "jdbc:postgresql://localhost:5432
 TIMESCALEDB_USER = os.getenv("TIMESCALEDB_USER", "postgres")
 TIMESCALEDB_PASS = os.getenv("TIMESCALEDB_PASS", "postgres")
 
-# --- Flink Environment ---
-env_settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
-t_env = TableEnvironment.create(env_settings)
 
 # --- Kafka Source Table ---
 kafka_source = f"""
