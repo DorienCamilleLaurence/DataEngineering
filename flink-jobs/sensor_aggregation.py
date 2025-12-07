@@ -65,7 +65,7 @@ def sliding_min(arr, k: int = 60):
     for i, val in enumerate(arr):
         while dq and dq[0] <= i - k:
             dq.popleft()
-        while dq and arr[dq[-1]] > val:
+        while dq and arr[dq[-1]] > val:     # dq[-1] = last element
             dq.pop()
         dq.append(i)
         if i >= k - 1:
