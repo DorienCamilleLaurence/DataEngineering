@@ -254,5 +254,16 @@ t_env.execute_sql(
     """
 )
 
+source_table = t_env.from_path("machine_sensors_kafka")
+env = StreamExecutionEnvironment.get_execution_environment()
+env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
+
+from pyflink.datastream.functions import TimestampAssigner
+
+class MsTimestampAssigner(TimestampAssigner):
+    def extract_timestamp(self, element, record_timestamp):
+        # element: (machine_id, sensor_type, value, timestamp_ms)
+        return element[3]
+
 print("Sensor aggregation job started.")
 

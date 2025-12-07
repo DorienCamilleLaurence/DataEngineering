@@ -45,7 +45,7 @@ services:
       - iiot-net
 
   flink-jobmanager:
-    image: flink:latest
+    build: ./flink-jobs
     command: jobmanager
     ports:
       - "8081:8081"
@@ -57,7 +57,7 @@ services:
       - iiot-net
 
   flink-taskmanager:
-    image: flink:latest
+    build: ./flink-jobs
     command: taskmanager
     environment:
       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
