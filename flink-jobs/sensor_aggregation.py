@@ -53,6 +53,10 @@ from pyflink.table.udf import udf
 import sys
 from collections import deque, defaultdict
 
+# --- Flink Environment ---
+env_settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
+t_env = TableEnvironment.create(env_settings)
+
 # -------------------------------------------------------------------
 # UDF (user defined function ): Sliding Min
 # -------------------------------------------------------------------
@@ -140,9 +144,6 @@ TIMESCALEDB_URL = os.getenv("TIMESCALEDB_URL", "jdbc:postgresql://localhost:5432
 TIMESCALEDB_USER = os.getenv("TIMESCALEDB_USER", "postgres")
 TIMESCALEDB_PASS = os.getenv("TIMESCALEDB_PASS", "postgres")
 
-# --- Flink Environment ---
-env_settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
-t_env = TableEnvironment.create(env_settings)
 
 # --- Kafka Source Table ---
 kafka_source = f"""
@@ -253,6 +254,17 @@ t_env.execute_sql(
     GROUP BY HOP(event_time, INTERVAL '30' SECOND, INTERVAL '1' MINUTE), machine_id, sensor_type
     """
 )
+
+source_table = t_env.from_path("machine_sensors_kafka")
+env = StreamExecutionEnvironment.get_execution_environment()
+env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
+
+from pyflink.datastream.functions import TimestampAssigner
+
+class MsTimestampAssigner(TimestampAssigner):
+    def extract_timestamp(self, element, record_timestamp):
+        # element: (machine_id, sensor_type, value, timestamp_ms)
+        return element[3]
 
 print("Sensor aggregation job started.")
 
