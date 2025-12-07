@@ -74,7 +74,6 @@ def generate_message(timestamp=None):
         "sensor_type": sensor,
         "value": round(generate_sensor_value(sensor), 2),
         "timestamp": datetime.utcnow().isoformat(timespec='milliseconds'),
-        "timestamp_ms": int(datetime.utcnow().timestamp()* 1000)
     }
 
 

@@ -55,7 +55,7 @@ services:
       - ./flink-jobs:/opt/flink/jobs
     networks:
       - iiot-net
-
+      
   flink-taskmanager:
     build: ./flink
     command: taskmanager
@@ -64,6 +64,8 @@ services:
     depends_on:
       flink-jobmanager:
         condition: service_started
+    volumes:
+      - ./flink-jobs:/opt/flink/jobs
     networks:
       - iiot-net
 
