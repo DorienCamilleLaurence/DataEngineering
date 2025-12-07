@@ -45,7 +45,7 @@ services:
       - iiot-net
 
   flink-jobmanager:
-    image: flink:latest
+    build: ./flink
     command: jobmanager
     ports:
       - "8081:8081"
@@ -57,7 +57,7 @@ services:
       - iiot-net
 
   flink-taskmanager:
-    image: flink:latest
+    build: ./flink
     command: taskmanager
     environment:
       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
@@ -69,6 +69,8 @@ services:
 
   spark-master:
     image: spark:3.5.0
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master --port 7077 --webui-port 8080
+
     ports:
       - "7077:7077"
       - "8082:8080"

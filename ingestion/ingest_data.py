@@ -73,7 +73,8 @@ def generate_message(timestamp=None):
         "location": machine["location"],
         "sensor_type": sensor,
         "value": round(generate_sensor_value(sensor), 2),
-        "timestamp": timestamp or datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(timespec='milliseconds'),
+        "timestamp_ms": int(datetime.utcnow().timestamp()* 1000)
     }
 
 
