@@ -70,6 +70,10 @@ def parse_event(value: str):
 
 
 
+# --- Flink Environment ---
+env_settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
+t_env = TableEnvironment.create(env_settings)
+
 # -------------------------------------------------------------------
 # UDF (user defined function ): Sliding Min
 # -------------------------------------------------------------------
