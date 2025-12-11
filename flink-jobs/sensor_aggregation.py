@@ -1,57 +1,74 @@
-"""import sys
-read machine-sensors
 
-#sliding for minimum
-def sliding_min(arr, k=60):
-    lowest = sys.maxsize
-    n = len(arr)
-    for i in range(n - k + 1):
-        window_min = min(arr[i:i+k])
-        lowest = min(lowest, window_min)
-    return lowest
+import os
+import json
+import sys
+from datetime import datetime
 
-# sliding for max
-def sliding_max(arr, k=60):
-    highest = -sys.maxsize
-    n = len(arr)
-    for i in range(n - k + 1):
-        window_max = max(arr[i:i+k])
-        highest = max(highest, window_max)
-    return highest
-
-#tumbling average
-from collections import defaultdict
-
-def tumbling_average(events, window_size=60):
-    buckets = defaultdict(list)
-    for ts, value in events:
-        window_id = ts // window_size
-        buckets[window_id].append(value)
-
-    averages = {}
-    for window_id, values in buckets.items():
-        averages[window_id] = sum(values) / len(values)
-    return averages
-
-
-
-#tumbling count
-def tumbling_count_average(values, window_size=60):
-    averages = []
-    for i in range(0, len(values), window_size):
-        window = values[i:i+window_size]
-        avg = sum(window) / len(window)
-        averages.append(avg)
-    return averages
-"""
-
-# sensor_aggregation.py
-# Cleaned PyFlink job
-# Added Python UDFs for sliding/tumbling logic based on user-provided functions
+from pyflink.table import EnvironmentSettings, TableEnvironment, Schema, DataTypes, StreamTableEnvironment
 
 from pyflink.table.udf import udf
-import sys
 from collections import deque, defaultdict
+
+from pyflink.common.watermark_strategy import WatermarkStrategy
+from pyflink.common import Types, Duration
+from pyflink.datastream import StreamExecutionEnvironment
+from pyflink.datastream.connectors.kafka import KafkaSource, KafkaOffsetsInitializer
+# from pyflink.datastream.functions import MapFunction
+
+
+# from pyflink.datastream.window import SlidingEventTimeWindows
+from pyflink.common.serialization import SimpleStringSchema
+# from pyflink.datastream.connectors.jdbc import JdbcSink
+# from pyflink.common import RuntimeExecutionMode
+from pyflink.common.watermark_strategy import TimestampAssigner
+
+class SensorTimestampAssigner(TimestampAssigner):
+    def extract_timestamp(self, event, record_timestamp):
+        return int(event[5])
+
+
+# ---------- Helper: JSON -> Python tuple ----------
+
+def parse_event(value: str):
+    """
+    Verwacht JSON zoals:
+    {
+      "machine_id": "M1",
+      "machine_type": "type1",
+      "location": "loc1",
+      "sensor_type": "temperature",
+      "value": 73.2,
+      "timestamp": "2025-12-07T10:23:12Z"
+    }
+    """
+    data = json.loads(value)
+
+    ts_str = data["timestamp"]
+
+    if ts_str is None:
+        raise ValueError("Event mist 'timestamp' veld")
+
+    # Support zowel "...Z" als zonder 'Z'
+    if ts_str.endswith("Z"):
+        ts_str = ts_str.replace("Z", "+00:00")
+
+    ts = datetime.fromisoformat(ts_str)
+    print(data["machine_id"],
+        data["machine_type"],
+        data["location"],
+        data["sensor_type"],
+        float(data["value"]),
+        ts)
+    return (
+        data["machine_id"],
+        data["machine_type"],
+        data["location"],
+        data["sensor_type"],
+        float(data["value"]),
+        int(ts.timestamp() * 1000)
+    )
+
+
 
 # --- Flink Environment ---
 env_settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
@@ -125,146 +142,203 @@ def tumbling_count_average(values, window_size: int = 60):
             averages.append(sum(window) / len(window))
     return averages
 
+
+
+# -------------------------------------------------------------------
+# Environment Variables
+# -------------------------------------------------------------------
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "redpanda:9092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "machine-sensors")
+
+TIMESCALE_URL = os.getenv("TIMESCALEDB_URL", "jdbc:postgresql://timescaledb:5432/iiot")
+TIMESCALE_USER = os.getenv("TIMESCALEDB_USER", "admin")
+TIMESCALE_PASS = os.getenv("TIMESCALEDB_PASS", "admin")
+
+# --- Flink Environment ---
+env_settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
+t_env = TableEnvironment.create(env_settings)
+
 # Register UDFs in Flink table env
 t_env.create_temporary_system_function("sliding_min", sliding_min)
 t_env.create_temporary_system_function("sliding_max", sliding_max)
 t_env.create_temporary_system_function("tumbling_average", tumbling_average)
 t_env.create_temporary_system_function("tumbling_count_average", tumbling_count_average)
- (no duplication with Dockerfile or ingest_data.py)
+# (no duplication with Dockerfile or ingest_data.py)
 # Reads Kafka → applies tumbling & sliding windows → writes to TimescaleDB
 
-import os
-from pyflink.table import EnvironmentSettings, TableEnvironment
+def main():
+    # ---------- Environments ----------
+    # env = StreamExecutionEnvironment.get_execution_environment()
+    # env.set_parallelism(1)
+    # t_env = StreamTableEnvironment.create(env)
 
-# Environment variables only (Dockerfile already sets Python runtime + deps)
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "machine-sensors")
+    env = StreamExecutionEnvironment.get_execution_environment()
+    env.set_parallelism(1)
+    t_env = StreamTableEnvironment.create(env)
 
-TIMESCALEDB_URL = os.getenv("TIMESCALEDB_URL", "jdbc:postgresql://localhost:5432/postgres")
-TIMESCALEDB_USER = os.getenv("TIMESCALEDB_USER", "postgres")
-TIMESCALEDB_PASS = os.getenv("TIMESCALEDB_PASS", "postgres")
+    # ---------- DataStream API: lees van Kafka + watermarks ----------
+    # Define Kafka Source
+    #ingest data from topic KAFKA_TOPIC
+    kafka_source = KafkaSource.builder() \
+        .set_bootstrap_servers(KAFKA_BOOTSTRAP_SERVERS) \
+        .set_topics(KAFKA_TOPIC) \
+        .set_group_id("flink-sensor-consumer") \
+        .set_starting_offsets(KafkaOffsetsInitializer.earliest()) \
+        .set_value_only_deserializer(SimpleStringSchema()) \
+        .build()
+
+    # Eerst ruwe String-messages
+    raw_stream = env.from_source(
+        kafka_source,
+        WatermarkStrategy.no_watermarks(),
+        "kafka-machine-sensors"
+    )
+
+    # Parse JSON -> (machine_id, sensor_type, value, ts_datetime)
+    parsed_stream = raw_stream.map(
+        parse_event,
+        output_type=Types.TUPLE([
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.STRING(),
+            Types.DOUBLE(),
+            Types.LONG() 
+        ])
+    )
+    # Watermarks + event-time (ts = index 3 van de tuple)
+    watermark_strategy = (
+        WatermarkStrategy
+        .for_bounded_out_of_orderness(Duration.of_seconds(5))
+        .with_timestamp_assigner(SensorTimestampAssigner())
+    )
+
+    timed_stream = parsed_stream.assign_timestamps_and_watermarks(
+        watermark_strategy 
+    )
+    timed_stream.print()
 
 
-# --- Kafka Source Table ---
-kafka_source = f"""
-CREATE TABLE machine_sensors_kafka (
-    machine_id STRING,
-    machine_type STRING,
-    machine_model STRING,
-    location STRING,
-    sensor_type STRING,
-    unit STRING,
-    value DOUBLE,
-    `timestamp` STRING,
-    timestamp_ms BIGINT,
-    event_time AS TO_TIMESTAMP_LTZ(timestamp_ms, 3),
-    WATERMARK FOR event_time AS event_time - INTERVAL '5' SECOND
-) WITH (
-    'connector' = 'kafka',
-    'topic' = '{KAFKA_TOPIC}',
-    'properties.bootstrap.servers' = '{KAFKA_BOOTSTRAP_SERVERS}',
-    'scan.startup.mode' = 'earliest-offset',
-    'format' = 'json'
-);
-"""
-t_env.execute_sql(kafka_source)
+# ---------- Table API: converteer DataStream -> Table met schema ----------
+    events_table = t_env.from_data_stream(
+        timed_stream,
+        Schema.new_builder()
+        .column_by_expression("machine_id", "f0")
+        .column_by_expression("machine_type", "f1")
+        .column_by_expression("location", "f2")
+        .column_by_expression("sensor_type", "f3")
+        .column_by_expression("value", "f4")
+        .column_by_expression("ts", "TO_TIMESTAMP_LTZ(f5, 3)")
+        .watermark("ts", "ts - INTERVAL '5' SECOND")
+        .build()
+    )
 
-# --- TimescaleDB Sink Tables ---
-raw_sink = f"""
-CREATE TABLE raw_machine_sensors (
-    machine_id STRING,
-    machine_type STRING,
-    machine_model STRING,
-    location STRING,
-    sensor_type STRING,
-    unit STRING,
-    value DOUBLE,
-    timestamp STRING,
-    timestamp_ms BIGINT
-) WITH (
-    'connector' = 'jdbc',
-    'url' = '{TIMESCALEDB_URL}',
-    'table-name' = 'machine_sensors',
-    'username' = '{TIMESCALEDB_USER}',
-    'password' = '{TIMESCALEDB_PASS}'
-);
-"""
-t_env.execute_sql(raw_sink)
+    # Maak een tijdelijke view voor SQL
+    t_env.create_temporary_view("sensor_events", events_table)
 
-t_env.execute_sql(
+
+    # Raw sensordata
+    jdbc_sink = f"""
+    CREATE TABLE IF NOT EXISTS machine_sensors_sink (
+        machine_id STRING,
+        machine_type STRING,
+        location STRING,
+        sensor_type STRING,
+        `value` DOUBLE,
+        ts TIMESTAMP(3)
+    ) WITH (
+        'connector' = 'jdbc',
+        'url' = '{TIMESCALE_URL}',
+        'table-name' = 'machine_sensors',
+        'username' = '{TIMESCALE_USER}',
+        'password' = '{TIMESCALE_PASS}',
+        'driver' = 'org.postgresql.Driver'
+    );
     """
-    INSERT INTO raw_machine_sensors
-    SELECT machine_id, machine_type, machine_model, location, sensor_type, unit, value, `timestamp`, timestamp_ms
-    FROM machine_sensors_kafka
+    t_env.execute_sql(jdbc_sink)
+
+    #Raw data -> machine_sensors
+    stmt_set = t_env.create_statement_set()
+
+    stmt_set.add_insert_sql(
+        """
+        INSERT INTO machine_sensors_sink
+        SELECT machine_id, machine_type, location, sensor_type, `value`, CAST(ts AS TIMESTAMP(3))
+        FROM sensor_events
+        """
+    )
+
+    # TimescaleDB aggregations
+    agg_sink = f"""
+    CREATE TABLE IF NOT EXISTS sensor_aggregates (
+        window_start TIMESTAMP(3),
+        window_end TIMESTAMP(3),
+        machine_id STRING,
+        sensor_type STRING,
+        avg_value DOUBLE,
+        min_value DOUBLE,
+        max_value DOUBLE,
+        reading_count BIGINT
+    ) WITH (
+        'connector' = 'jdbc',
+        'url' = '{TIMESCALE_URL}',
+        'table-name' = 'sensor_aggregates',
+        'username' = '{TIMESCALE_USER}',
+        'password' = '{TIMESCALE_PASS}'
+    );
     """
-)
+    t_env.execute_sql(agg_sink)
+    print("Running TUMBLING WINDOW aggregation (Table API)...")
 
-agg_sink = f"""
-CREATE TABLE sensor_aggregates (
-    machine_id STRING,
-    sensor_type STRING,
-    window_start TIMESTAMP(3),
-    window_end TIMESTAMP(3),
-    avg_value DOUBLE,
-    min_value DOUBLE,
-    max_value DOUBLE,
-    cnt BIGINT
-) WITH (
-    'connector' = 'jdbc',
-    'url' = '{TIMESCALEDB_URL}',
-    'table-name' = 'sensor_aggregates',
-    'username' = '{TIMESCALEDB_USER}',
-    'password' = '{TIMESCALEDB_PASS}'
-);
-"""
-t_env.execute_sql(agg_sink)
+# ---------- StatementSet: alle INSERTS in één streaming job ----------
 
-# --- Tumbling Window (1 minute) ---
-t_env.execute_sql(
-    """
-    INSERT INTO sensor_aggregates
-    SELECT
-        machine_id,
-        sensor_type,
-        TUMBLE_START(event_time, INTERVAL '1' MINUTE),
-        TUMBLE_END(event_time, INTERVAL '1' MINUTE),
-        AVG(value),
-        MIN(value),
-        MAX(value),
-        COUNT(*)
-    FROM machine_sensors_kafka
-    GROUP BY TUMBLE(event_time, INTERVAL '1' MINUTE), machine_id, sensor_type
-    """
-)
+    # --- Tumbling Window (1 minute) ---
+    stmt_set.add_insert_sql(
+        """
+        INSERT INTO sensor_aggregates
+        SELECT
+            CAST(TUMBLE_START(ts, INTERVAL '1' MINUTE) AS TIMESTAMP(3)),
+            CAST(TUMBLE_END(ts, INTERVAL '1' MINUTE) AS TIMESTAMP(3)),
+            machine_id,
+            sensor_type,
+            AVG(`value`) AS avg_value,
+            MIN(`value`) AS min_value,
+            MAX(`value`) AS max_value,
+            COUNT(*)
+        FROM sensor_events
+        GROUP BY TUMBLE(ts, INTERVAL '1' MINUTE), machine_id, sensor_type
+        """
+    )
 
-# --- Sliding Window (1 minute window, 30s slide) ---
-t_env.execute_sql(
-    """
-    INSERT INTO sensor_aggregates
-    SELECT
-        machine_id,
-        sensor_type,
-        HOP_START(event_time, INTERVAL '30' SECOND, INTERVAL '1' MINUTE),
-        HOP_END(event_time, INTERVAL '30' SECOND, INTERVAL '1' MINUTE),
-        AVG(value),
-        MIN(value),
-        MAX(value),
-        COUNT(*)
-    FROM machine_sensors_kafka
-    GROUP BY HOP(event_time, INTERVAL '30' SECOND, INTERVAL '1' MINUTE), machine_id, sensor_type
-    """
-)
+    print("Running SLIDING WINDOW (HOP) aggregation (Table API)...")
 
-source_table = t_env.from_path("machine_sensors_kafka")
-env = StreamExecutionEnvironment.get_execution_environment()
-env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
+    # --- Sliding Window (1 minute window, 30s slide) ---
+    stmt_set.add_insert_sql(
+        """
+        INSERT INTO sensor_aggregates
+        SELECT
+            CAST(HOP_START(ts, INTERVAL '30' SECOND, INTERVAL '1' MINUTE) AS TIMESTAMP(3)),
+            CAST(HOP_END(ts, INTERVAL '30' SECOND, INTERVAL '1' MINUTE) AS TIMESTAMP(3)),
+            machine_id,
+            sensor_type,
+            AVG(`value`),
+            MIN(`value`),
+            MAX(`value`),
+            COUNT(*)
+        FROM sensor_events
+        GROUP BY HOP(ts, INTERVAL '30' SECOND, INTERVAL '1' MINUTE), machine_id, sensor_type
+        """
+    )
 
-from pyflink.datastream.functions import TimestampAssigner
+    print("Sensor aggregation job started.")
+    print("Starting DataStream sliding window pipeline...")
 
-class MsTimestampAssigner(TimestampAssigner):
-    def extract_timestamp(self, element, record_timestamp):
-        # element: (machine_id, sensor_type, value, timestamp_ms)
-        return element[3]
+    print("Registered tables:", t_env.list_tables())
 
-print("Sensor aggregation job started.")
+    # Start de job (streaming: blijft lopen)
+    result = stmt_set.execute()
+    # optioneel: blokkeer zodat container niet direct stopt
+    result.wait()
 
+if __name__ == "__main__":
+    main()
